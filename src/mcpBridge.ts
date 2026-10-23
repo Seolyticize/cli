@@ -50,7 +50,7 @@ export async function runMcpBridge(options: BridgeOptions): Promise<void> {
   const endpoint = `${options.baseUrl.replace(/\/+$/, "")}/api/mcp${
     options.group ? `?group=${encodeURIComponent(options.group)}` : ""
   }`;
-  const doFetch = options.fetch ?? fetch;
+  const doFetch: typeof fetch = options.fetch ?? fetch;
   let session: string | null = null;
   let protocol: string | null = null;
 
@@ -75,7 +75,7 @@ export async function runMcpBridge(options: BridgeOptions): Promise<void> {
       .map((entry) => entry.id);
 
     try {
-      const response = await doFetch(endpoint, {
+      const response: Response = await doFetch(endpoint, {
         method: "POST",
         headers: {
           authorization: `Bearer ${options.apiKey}`,
