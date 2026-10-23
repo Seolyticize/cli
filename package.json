@@ -1,6 +1,6 @@
 {
   "name": "@seolyticize/cli",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "The seolyticize command: every Seolyticize tool from a terminal or a script.",
   "type": "module",
   "license": "MIT",
@@ -19,7 +19,7 @@
     "prepare": "npm run build"
   },
   "dependencies": {
-    "@seolyticize/sdk": "^0.1.0"
+    "@seolyticize/sdk": "^0.2.0"
   },
   "types": "./dist/index.d.ts",
   "repository": {
