@@ -7,7 +7,7 @@ tool added to the platform today is a command today, without a new CLI release.
 ## Install
 
 ```sh
-npm install -g github:Seolyticize/cli
+npm install -g @seolyticize/cli
 seolyticize --help
 ```
 
