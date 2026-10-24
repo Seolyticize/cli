@@ -84,6 +84,23 @@ function coerceScalar(name: string, raw: string, schema: Schema): unknown {
  * mistake, and gives arrays a shell-friendly spelling (repeat the option, or
  * separate with commas).
  */
+/**
+ * The names every tool accepts whatever its own schema calls them (the
+ * server's conventions), plus --client, which the CLI resolves by name. They
+ * pass through untyped beyond days, which is a number everywhere.
+ */
+const CONVENTIONS = new Set([
+  "client",
+  "target",
+  "market",
+  "country",
+  "language",
+  "cursor",
+  "from",
+  "to",
+  "days",
+]);
+
 export function coerceFlags(
   schema: Record<string, unknown>,
   options: Map<string, string[]>,
@@ -95,6 +112,11 @@ export function coerceFlags(
   for (const [rawName, values] of options) {
     if (reserved.has(rawName)) continue;
     const name = rawName in properties ? rawName : camelCase(rawName);
+    if (!(name in properties) && CONVENTIONS.has(rawName)) {
+      const value = values.at(-1) ?? "";
+      input[rawName] = rawName === "days" && /^\d+$/.test(value) ? Number(value) : value;
+      continue;
+    }
     if (!(name in properties)) {
       const known = Object.keys(properties);
       throw new UsageError(

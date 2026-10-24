@@ -64,6 +64,9 @@ Usage:
 
 Shortcuts:
   seolyticize clients                                  list_clients
+  seolyticize find "<task>"                            find_tools: the tools for a task
+  seolyticize recipe [<name>] --client <client>        get_recipe: a named plan of calls
+  seolyticize wait <kind:id> --client <client>         wait_for_job (crawl:<id>, rank:<id>…)
   seolyticize rank <trackerId> --client <clientId>     get_rank_summary
   seolyticize alerts --client <clientId> [--since <iso>]
                                                       list_recent_alerts (default: last 7 days)
@@ -76,7 +79,9 @@ Options:
 
 Tool options are read from the tool's own schema: arrays take repeated options or
 commas (--domains=a.com,b.com), objects take JSON, and --client-id is the same as
---clientId. Tools are discovered at runtime, so new ones work without upgrading.
+--clientId. --client takes a client's id or its name (--client numestri). The
+common names work on every tool: --target, --market us-en, --country US, --days.
+Tools are discovered at runtime, so new ones work without upgrading.
 
 Environment:
   SEOLYTICIZE_API_KEY    key to use instead of the stored one
@@ -175,9 +180,47 @@ export async function run(argv: readonly string[], io: CliIo): Promise<number> {
       return discovery;
     };
 
+    /**
+     * --client takes a client's id or its name: `--client numestri` is the
+     * client called Numestri, so a person need not look the id up first. A
+     * name matching more than one client is refused with the candidates.
+     */
+    const resolveClient = async (input: Record<string, unknown>) => {
+      const given = input["clientId"] ?? input["client"];
+      delete input["client"];
+      if (typeof given !== "string" || /^client_[A-Za-z0-9]+$/.test(given)) {
+        if (given !== undefined) input["clientId"] = given;
+        return input;
+      }
+      const { clients } = (await connect().call("list_clients", {})) as {
+        clients: Array<{ id: string; name: string }>;
+      };
+      // An id this key can reach is taken as one, whatever it looks like.
+      if (clients.some((client) => client.id === given)) {
+        input["clientId"] = given;
+        return input;
+      }
+      const wanted = given.trim().toLowerCase();
+      const named = clients.filter((client) => typeof client.name === "string");
+      const exact = named.filter((client) => client.name.toLowerCase() === wanted);
+      const partial = named.filter((client) =>
+        client.name.toLowerCase().includes(wanted),
+      );
+      const found = exact.length > 0 ? exact : partial;
+      if (found.length !== 1) {
+        throw new UsageError(
+          found.length === 0
+            ? `No client is called "${given}". \`seolyticize clients\` lists them.`
+            : `"${given}" matches ${found.map((client) => `${client.name} (${client.id})`).join(", ")}: give the id.`,
+        );
+      }
+      input["clientId"] = found[0]!.id;
+      return input;
+    };
+
     const callTool = async (name: string, input: Record<string, unknown>) => {
       const client = connect();
-      const data = await client.call(name, input);
+      const data = await client.call(name, await resolveClient(input));
       print(io, args, data, () => formatResult(data));
       return EXIT.ok;
     };
@@ -369,6 +412,30 @@ export async function run(argv: readonly string[], io: CliIo): Promise<number> {
 
       case "clients":
         return await callTool("list_clients", {});
+
+      case "find": {
+        const task = rest.join(" ").trim();
+        if (!task)
+          throw new UsageError('Usage: seolyticize find "<what you want to do>"');
+        return await callTool("find_tools", { task });
+      }
+
+      case "recipe": {
+        const name = rest[0];
+        const client = option(args, "client");
+        if (!client)
+          throw new UsageError("Usage: seolyticize recipe [<name>] --client <client>");
+        return await callTool("get_recipe", { client, name: name ?? null });
+      }
+
+      case "wait": {
+        const jobId = rest[0];
+        const client = option(args, "client");
+        if (!jobId || !client) {
+          throw new UsageError("Usage: seolyticize wait <kind:id> --client <client>");
+        }
+        return await callTool("wait_for_job", { client, jobId, timeoutSeconds: 60 });
+      }
 
       case "rank": {
         const trackerId = rest[0] ?? option(args, "tracker");
