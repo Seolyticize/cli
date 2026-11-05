@@ -1,4 +1,7 @@
 import { runMcpBridge } from "./mcpBridge.js";
+import { initFiles, writeInitFiles, type OnboardAnswer } from "./init.js";
+import { runDoctor } from "./doctor.js";
+import { verifyLocal } from "./verifyLocal.js";
 import {
   AuthenticationError,
   DEFAULT_BASE_URL,
@@ -23,7 +26,7 @@ import {
 import { EXIT, EXIT_HELP, exitCodeFor } from "./exitCodes.js";
 import { formatResult, formatTable } from "./format.js";
 
-export const CLI_VERSION = "0.2.0";
+export const CLI_VERSION = "0.6.0";
 
 /**
  * Everything the CLI touches outside itself, passed in.
@@ -61,6 +64,18 @@ Usage:
   seolyticize <tool> [--<option>=<value> ...]          same as call
   seolyticize mcp [--group <group>]                    the hosted MCP server over stdio, for
                                                       clients that only launch a command
+  seolyticize init --domain <domain> [--framework nextjs|astro|…] [--dir .] [--public public]
+            [--verification file|meta|dns] [--force] [--dry-run]
+                                                      onboard_site, then write its files to the repo:
+                                                      verification and IndexNow files, robots, and for
+                                                      Next.js the analytics component, CSP origins and
+                                                      a sitemap source. Existing files are kept.
+  seolyticize verify --site <domain> | --client <id>   verify_site: one line per item not done;
+                                                      exit 10 when an item failed
+  seolyticize verify --local <dir> [--public public]   the same mistakes in the repo's files, before a
+                                                      deploy; no key, no network; exit 10 on any
+  seolyticize doctor --site <domain> | --client <id>   one PASS, FAIL or INFO line per check; a read-only
+                                                      key will do; exit 10 on any FAIL
 
 Shortcuts:
   seolyticize clients                                  list_clients
@@ -92,6 +107,10 @@ ${EXIT_HELP}
 
 /** Options the CLI itself consumes; never forwarded to a tool. */
 const RESERVED = new Set([
+  "dry-run",
+  "force",
+  "dir",
+  "public",
   "json",
   "input",
   "file",
@@ -412,6 +431,132 @@ export async function run(argv: readonly string[], io: CliIo): Promise<number> {
 
       case "clients":
         return await callTool("list_clients", {});
+
+      case "init": {
+        const domain = option(args, "domain") ?? rest[0];
+        if (!domain) {
+          throw new UsageError(
+            "Usage: seolyticize init --domain <domain> [--framework nextjs] [--dir .]",
+          );
+        }
+        const framework = option(args, "framework") ?? "other";
+        const answer = (await connect().call("onboard_site", {
+          domain,
+          framework,
+          verification: option(args, "verification") ?? "file",
+        })) as OnboardAnswer;
+        const files = initFiles(answer, framework, option(args, "public") ?? "public");
+        const results = await writeInitFiles(option(args, "dir") ?? ".", files, {
+          force: flag(args, "force"),
+          dryRun: flag(args, "dry-run"),
+        });
+        print(
+          io,
+          args,
+          { clientId: answer.clientId, files: results, next: answer.next },
+          () =>
+            [
+              `Client ${answer.clientId} (${answer.domain})`,
+              ...results.map((result) => `  ${result.outcome.padEnd(11)} ${result.path}`),
+              ...(framework === "nextjs"
+                ? [
+                    "Render <SeolyticizeAnalytics /> once in app/layout.tsx (npm i @seolyticize/next).",
+                    'Behind a consent banner? consent="banner-gated" holds the tag until the banner grants analytics_storage, so counts start only after a grant. Without it, the tag sends from the first page.',
+                  ]
+                : answer.analytics.install
+                  ? ["Add the analytics tag:", answer.analytics.install]
+                  : []),
+              `Before you deploy: seolyticize verify --local . Then deploy, and run: seolyticize verify --client ${answer.clientId}`,
+              "Every tool also works over plain REST: POST /api/v1/tools/<name> with the API key.",
+            ].join("\n"),
+        );
+        return EXIT.ok;
+      }
+
+      case "doctor": {
+        const sdk = connect();
+        let clientId = option(args, "client") ?? option(args, "client-id");
+        const site = option(args, "site") ?? rest[0];
+        if (!clientId) {
+          if (!site)
+            throw new UsageError(
+              "Usage: seolyticize doctor --site <domain> | --client <id>",
+            );
+          const found = (await sdk.call("list_clients", { domain: site })) as {
+            clients: Array<{ id: string }>;
+          };
+          clientId = found.clients[0]?.id;
+          if (!clientId)
+            throw new NotFoundError(`No client has the site ${site}.`, { status: 404 });
+        }
+        const checks = await runDoctor(sdk, clientId);
+        print(io, args, { clientId, checks }, () =>
+          checks
+            .map((check) => `${check.result.padEnd(4)} ${check.name}: ${check.detail}`)
+            .join("\n"),
+        );
+        return checks.some((check) => check.result === "FAIL")
+          ? EXIT.checksFailed
+          : EXIT.ok;
+      }
+
+      case "verify": {
+        const localDir = option(args, "local");
+        if (localDir) {
+          const failures = await verifyLocal(
+            localDir,
+            option(args, "public") ?? "public",
+          );
+          print(io, args, { failures }, () =>
+            failures.length === 0
+              ? "No problems found in the repo's files."
+              : failures
+                  .map((one) => `FAIL ${one.code} ${one.file}: ${one.fix}`)
+                  .join("\n"),
+          );
+          return failures.length > 0 ? EXIT.checksFailed : EXIT.ok;
+        }
+        let clientId = option(args, "client") ?? option(args, "client-id");
+        const site = option(args, "site") ?? rest[0];
+        const sdk = connect();
+        if (!clientId) {
+          if (!site)
+            throw new UsageError(
+              "Usage: seolyticize verify --site <domain> | --client <id>",
+            );
+          const found = (await sdk.call("list_clients", { domain: site })) as {
+            clients: Array<{ id: string }>;
+          };
+          clientId = found.clients[0]?.id;
+          if (!clientId)
+            throw new NotFoundError(`No client has the site ${site}.`, { status: 404 });
+        }
+        const check = (await sdk.call("verify_site", { clientId })) as {
+          ready: boolean;
+          items: Array<{
+            id: string;
+            status: string;
+            code?: string;
+            detail: string;
+            next: unknown;
+          }>;
+        };
+        const open = check.items.filter(
+          (item) => item.status !== "done" && item.status !== "optional",
+        );
+        print(io, args, check, () =>
+          [
+            check.ready ? "ready" : "not ready",
+            ...open.map(
+              (item) =>
+                `  ${item.status.padEnd(11)} ${item.code ?? item.id}: ${item.detail}${item.next ? ` → ${JSON.stringify(item.next)}` : ""}`,
+            ),
+          ].join("\n"),
+        );
+        return open.some((item) => item.status === "failed")
+          ? EXIT.checksFailed
+          : EXIT.ok;
+      }
 
       case "find": {
         const task = rest.join(" ").trim();

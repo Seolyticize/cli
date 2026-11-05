@@ -62,6 +62,20 @@ seolyticize rank <trackerId> --client <id> # get_rank_summary
 seolyticize alerts --client <id> [--since 2026-10-01T00:00:00Z]   # last 7 days by default
 ```
 
+### Onboard a site from its repo
+
+```sh
+seolyticize init --domain example.com --framework nextjs [--dry-run] [--force] [--dir .] [--public public]
+```
+
+Calls `onboard_site` and writes what it returns: the IndexNow and verification files under `public/`, the robots source, and for Next.js `app/seolyticize.tsx` (the `<Analytics>` component and its CSP origins) and `app/sitemap.ts`. Files already there are kept unless `--force`; `--dry-run` lists them.
+
+```sh
+seolyticize verify --site example.com   # or --client <id>; exit 10 on a failed check, so CI can stop
+```
+
+Prints one line per item not done, with its code, detail and next call.
+
 ### Output
 
 Human-readable tables by default. Scripts should pass `--json`, which prints the tool's
@@ -87,6 +101,7 @@ Stable, so scripts can branch on them:
 | 7    | refused (a well-formed request the product declined) |
 | 8    | rate limited (after the SDK's retries)               |
 | 9    | server error or network failure                      |
+| 10   | `seolyticize verify`: the site has a failed check    |
 
 Errors go to stderr; results go to stdout.
 
