@@ -36,10 +36,11 @@ const inNextApp = (name: string) =>
   );
 
 const LAYOUT = /^layout\.(tsx|jsx|js|ts)$/;
-/** The tag, or a component of the site's own whose name says it wraps the tag. */
-const TAG =
-  /data-site=|\/a\.js\b|@seolyticize\/next|<Analytics\b|<\w*Seolyticize\w*\b|\bseolyticize\w*\s*\(/i;
+/** The script tag, or a component of the site's own whose name says it wraps it. */
+const TAG = /data-site=|\/a\.js\b|<SeolyticizeAnalytics\b|<\w*Seolyticize\w*\b/i;
 const IMPORT = /(?:from\s+|import\s+|import\(\s*)["']([^"']+)["']/g;
+const FOLLOW_DEPTH = 4;
+const FOLLOW_FILES = 200;
 const SOURCE_EXTENSIONS = [
   "",
   ".tsx",
@@ -66,12 +67,23 @@ async function layoutsUnder(dir: string, root: string, depth = 6): Promise<strin
   return found;
 }
 
-/** A file's own import, or null for a package's. Undefined when it should exist and does not. */
+/** Without comments, so a tag that is commented out does not count. */
+const uncommented = (text: string) =>
+  text
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(/(^|\s)\/\/.*$/gm, "$1");
+
+/** Whether this file renders the tag: an import alone never runs it. */
+const rendersTag = (text: string) =>
+  TAG.test(text) || (/<Analytics\b/.test(text) && /@seolyticize\/next/.test(text));
+
+/** A file's own import, null for a package's, undefined when it should exist and does not. */
 async function resolveImport(
   dir: string,
   from: string,
   target: string,
-): Promise<string | null | undefined> {
+): Promise<{ file: string; text: string } | null | undefined> {
   const bases = target.startsWith(".")
     ? [join(dirname(from), target)]
     : /^[@~]\//.test(target)
@@ -80,12 +92,47 @@ async function resolveImport(
   if (!bases) return null;
   for (const base of bases) {
     for (const extension of SOURCE_EXTENSIONS) {
-      const text =
-        extension || /\.\w+$/.test(base) ? await read(join(dir, base + extension)) : null;
-      if (text !== null) return text;
+      const file = base + extension;
+      const text = extension || /\.\w+$/.test(base) ? await read(join(dir, file)) : null;
+      if (text !== null) return { file, text };
     }
   }
   return undefined;
+}
+
+/**
+ * Whether the tag is rendered in these files or the site's own files they
+ * import, and whether all of those could be read. A layout often renders a
+ * wrapper, which may render another, or come through a barrel.
+ */
+async function findTag(
+  dir: string,
+  roots: Array<{ file: string; text: string }>,
+): Promise<{ tagged: boolean; complete: boolean }> {
+  const seen = new Set(roots.map(({ file }) => file));
+  let level = roots;
+  let complete = true;
+  for (let depth = 0; level.length > 0; depth += 1) {
+    if (level.some(({ text }) => rendersTag(uncommented(text)))) {
+      return { tagged: true, complete };
+    }
+    if (depth === FOLLOW_DEPTH || seen.size > FOLLOW_FILES) {
+      return { tagged: false, complete: false };
+    }
+    const next: typeof level = [];
+    for (const { file, text } of level) {
+      for (const [, target] of uncommented(text).matchAll(IMPORT)) {
+        const found = await resolveImport(dir, file, target!);
+        if (found === undefined) complete = false;
+        else if (found && !seen.has(found.file)) {
+          seen.add(found.file);
+          next.push(found);
+        }
+      }
+    }
+    level = next;
+  }
+  return { tagged: false, complete };
 }
 
 export async function verifyLocal(
@@ -185,16 +232,7 @@ export async function verifyLocal(
     const text = await read(join(dir, file));
     if (text !== null) texts.push({ file, text });
   }
-  let tagged = texts.some(({ text }) => TAG.test(text));
-  let unread = false;
-  // One level of the site's own imports: a layout often renders a wrapper.
-  for (const { file, text } of tagged ? [] : texts) {
-    for (const [, target] of text.matchAll(IMPORT)) {
-      const imported = await resolveImport(dir, file, target!);
-      if (imported === undefined) unread = true;
-      else if (imported !== null && TAG.test(imported)) tagged = true;
-    }
-  }
+  const { tagged, complete } = await findTag(dir, texts);
   if (!tagged && texts.length === 0) {
     failures.push({
       file: "<layout>",
@@ -202,11 +240,11 @@ export async function verifyLocal(
       fix: `No layout or index.html here to read, so the tag could not be checked. ${addTag}`,
       warn: true,
     });
-  } else if (!tagged && unread) {
+  } else if (!tagged && !complete) {
     failures.push({
       file: texts[0]!.file,
       code: "analytics_tag_unknown",
-      fix: `No tag found, and an import could not be followed, so this cannot tell. ${addTag}`,
+      fix: `No tag found, and not every import could be followed, so this cannot tell. ${addTag}`,
       warn: true,
     });
   } else if (!tagged) {
