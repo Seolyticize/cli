@@ -75,8 +75,11 @@ const uncommented = (text: string) =>
     .replace(/(^|\s)\/\/.*$/gm, "$1");
 
 /** Whether this file renders the tag: an import alone never runs it. */
-const rendersTag = (text: string) =>
-  TAG.test(text) || (/<Analytics\b/.test(text) && /@seolyticize\/next/.test(text));
+const rendersTag = (text: string) => {
+  // A string that opens with the element is text, not JSX; no real JSX has a quote right before it.
+  const jsx = text.replace(/(['"`])\s*<Analytics\b[^\n]*?\1/g, "");
+  return TAG.test(jsx) || (/<Analytics\b/.test(jsx) && /@seolyticize\/next/.test(jsx));
+};
 
 /** A file's own import, null for a package's, undefined when it should exist and does not. */
 async function resolveImport(
@@ -201,6 +204,7 @@ export async function verifyLocal(
       failures.push({
         file: sitemapFile.file,
         code: "sitemap_lastmod_missing",
+        warn: true,
         fix: `${urls - dated} of ${urls} URLs have no <lastmod>, so deploys cannot find what changed in them.`,
       });
     }
@@ -210,6 +214,7 @@ export async function verifyLocal(
     failures.push({
       file: sitemapRoute.file,
       code: "sitemap_lastmod_missing",
+      warn: true,
       fix: "Set lastModified on each entry, so deploys can find what changed.",
     });
   }
