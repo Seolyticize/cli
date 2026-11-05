@@ -26,7 +26,7 @@ import {
 import { EXIT, EXIT_HELP, exitCodeFor } from "./exitCodes.js";
 import { formatResult, formatTable } from "./format.js";
 
-export const CLI_VERSION = "0.6.0";
+export const CLI_VERSION = "0.6.1";
 
 /**
  * Everything the CLI touches outside itself, passed in.
@@ -511,10 +511,13 @@ export async function run(argv: readonly string[], io: CliIo): Promise<number> {
             failures.length === 0
               ? "No problems found in the repo's files."
               : failures
-                  .map((one) => `FAIL ${one.code} ${one.file}: ${one.fix}`)
+                  .map(
+                    (one) =>
+                      `${one.warn ? "WARN" : "FAIL"} ${one.code} ${one.file}: ${one.fix}`,
+                  )
                   .join("\n"),
           );
-          return failures.length > 0 ? EXIT.checksFailed : EXIT.ok;
+          return failures.some((one) => !one.warn) ? EXIT.checksFailed : EXIT.ok;
         }
         let clientId = option(args, "client") ?? option(args, "client-id");
         const site = option(args, "site") ?? rest[0];
