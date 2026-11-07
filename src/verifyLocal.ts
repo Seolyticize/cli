@@ -78,9 +78,12 @@ const uncommented = (text: string) =>
 const rendersTag = (text: string) => {
   // Text inside a string or template literal is not rendered, so it is emptied first;
   // attribute names outside the quotes (data-site=, siteKey=) are what is matched.
+  // Only a quote where code expects a value opens a string: one after a letter, as in
+  // "Don't", is page text.
   const jsx = text.replace(
-    /'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`/g,
-    (literal) => literal[0]! + literal[0]!,
+    /(^|[=(,:[{?+!&|;]|\breturn)(\s*)('(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`)/gm,
+    (_match, before: string, space: string, literal: string) =>
+      before + space + literal[0]! + literal[0]!,
   );
   // The package name is itself a string, so the import is read from the text as it is.
   return TAG.test(jsx) || (/<Analytics\b/.test(jsx) && /@seolyticize\/next/.test(text));
