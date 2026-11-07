@@ -26,7 +26,7 @@ import {
 import { EXIT, EXIT_HELP, exitCodeFor } from "./exitCodes.js";
 import { formatResult, formatTable } from "./format.js";
 
-export const CLI_VERSION = "0.6.3";
+export const CLI_VERSION = "0.6.4";
 
 /**
  * Everything the CLI touches outside itself, passed in.

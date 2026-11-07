@@ -76,9 +76,14 @@ const uncommented = (text: string) =>
 
 /** Whether this file renders the tag: an import alone never runs it. */
 const rendersTag = (text: string) => {
-  // A string that opens with the element is text, not JSX; no real JSX has a quote right before it.
-  const jsx = text.replace(/(['"`])\s*<Analytics\b[^\n]*?\1/g, "");
-  return TAG.test(jsx) || (/<Analytics\b/.test(jsx) && /@seolyticize\/next/.test(jsx));
+  // Text inside a string or template literal is not rendered, so it is emptied first;
+  // attribute names outside the quotes (data-site=, siteKey=) are what is matched.
+  const jsx = text.replace(
+    /'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`/g,
+    (literal) => literal[0]! + literal[0]!,
+  );
+  // The package name is itself a string, so the import is read from the text as it is.
+  return TAG.test(jsx) || (/<Analytics\b/.test(jsx) && /@seolyticize\/next/.test(text));
 };
 
 /** A file's own import, null for a package's, undefined when it should exist and does not. */
