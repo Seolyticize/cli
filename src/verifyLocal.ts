@@ -74,6 +74,10 @@ const uncommented = (text: string) =>
     .replace(/<!--[\s\S]*?-->/g, "")
     .replace(/(^|\s)\/\/.*$/gm, "$1");
 
+/** Empties a matched string literal, keeping what came before it. */
+const empty = (_match: string, before: string, space: string, literal: string) =>
+  before + space + literal[0]! + literal[0]!;
+
 /** Whether this file renders the tag: an import alone never runs it. */
 const rendersTag = (text: string) => {
   // Text inside a string or template literal is not rendered, so it is emptied first;
@@ -81,11 +85,16 @@ const rendersTag = (text: string) => {
   // Only a quote where code expects a value opens a string: one after a letter, as in
   // "Don't", is page text. And code goes on after a closing quote with punctuation, an
   // operator, a keyword or the line's end; text goes on with words ("we're", "users' sites").
-  const jsx = text.replace(
-    /(^|=>|[=(,:[{?+!&|;]|\breturn)(\s*)('(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`)(?=\s*(?:[,;:)\]}?+&|.>/=!]|\b(?:as|satisfies|in|instanceof)\b|$))/gm,
-    (_match, before: string, space: string, literal: string) =>
-      before + space + literal[0]! + literal[0]!,
-  );
+  // A quote after a lone = (an attribute or assignment) is always a value, whatever follows it.
+  const jsx = text
+    .replace(
+      /((?<![=!<>])=(?![=>]))(\s*)('(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`)/g,
+      empty,
+    )
+    .replace(
+      /(^|=>|[=(,:[{?+!&|;]|\breturn)(\s*)('(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`)(?=\s*(?:[,;:)\]}?+&|.>/=!]|\b(?:as|satisfies|in|instanceof)\b|$))/gm,
+      empty,
+    );
   // The package name is itself a string, so the import is read from the text as it is.
   return TAG.test(jsx) || (/<Analytics\b/.test(jsx) && /@seolyticize\/next/.test(text));
 };

@@ -1,6 +1,6 @@
 {
   "name": "@seolyticize/cli",
-  "version": "0.6.7",
+  "version": "0.6.8",
   "description": "The seolyticize command: every Seolyticize tool from a terminal or a script.",
   "type": "module",
   "license": "MIT",
