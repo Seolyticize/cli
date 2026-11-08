@@ -79,10 +79,10 @@ const rendersTag = (text: string) => {
   // Text inside a string or template literal is not rendered, so it is emptied first;
   // attribute names outside the quotes (data-site=, siteKey=) are what is matched.
   // Only a quote where code expects a value opens a string: one after a letter, as in
-  // "Don't", is page text. Code never puts a word right after a closing quote; text does
-  // ("we're"), so such a match is not a literal either.
+  // "Don't", is page text. And code goes on after a closing quote with punctuation, an
+  // operator, a keyword or the line's end; text goes on with words ("we're", "users' sites").
   const jsx = text.replace(
-    /(^|=>|[=(,:[{?+!&|;]|\breturn)(\s*)('(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`)(?!\w)/gm,
+    /(^|=>|[=(,:[{?+!&|;]|\breturn)(\s*)('(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`)(?=\s*(?:[,;:)\]}?+&|.>/=!]|\b(?:as|satisfies|in|instanceof)\b|$))/gm,
     (_match, before: string, space: string, literal: string) =>
       before + space + literal[0]! + literal[0]!,
   );
