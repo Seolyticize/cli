@@ -17,6 +17,8 @@ export type BridgeOptions = {
   write: (line: string) => void;
   log: (line: string) => void;
   fetch?: typeof fetch;
+  /** Sent as X-Seolyticize-Client: "cli/0.6.9". */
+  client?: string | undefined;
 };
 
 type Message = { jsonrpc?: string; id?: string | number | null; method?: string };
@@ -81,6 +83,7 @@ export async function runMcpBridge(options: BridgeOptions): Promise<void> {
           authorization: `Bearer ${options.apiKey}`,
           "content-type": "application/json",
           accept: "application/json, text/event-stream",
+          ...(options.client ? { "x-seolyticize-client": options.client } : {}),
           ...(session ? { "mcp-session-id": session } : {}),
           ...(protocol ? { "mcp-protocol-version": protocol } : {}),
         },

@@ -2,6 +2,7 @@ import { runMcpBridge } from "./mcpBridge.js";
 import { initFiles, writeInitFiles, type OnboardAnswer } from "./init.js";
 import { runDoctor } from "./doctor.js";
 import { verifyLocal } from "./verifyLocal.js";
+import { envCommand } from "./env.js";
 import {
   AuthenticationError,
   DEFAULT_BASE_URL,
@@ -26,7 +27,7 @@ import {
 import { EXIT, EXIT_HELP, exitCodeFor } from "./exitCodes.js";
 import { formatResult, formatTable } from "./format.js";
 
-export const CLI_VERSION = "0.6.8";
+export const CLI_VERSION = "0.6.9";
 
 /**
  * Everything the CLI touches outside itself, passed in.
@@ -50,6 +51,8 @@ export type CliIo = {
   /** stdin as lines, for `seolyticize mcp`. */
   stdinLines?: () => AsyncIterable<string>;
   now?: () => Date;
+  /** For `env --push coolify`; the global fetch when absent. */
+  fetch?: typeof fetch;
 };
 
 export const USAGE = `seolyticize — every Seolyticize tool from a terminal or a script.
@@ -76,6 +79,10 @@ Usage:
                                                       deploy; no key, no network; exit 10 on any
   seolyticize doctor --site <domain> | --client <id>   one PASS, FAIL or INFO line per check; a read-only
                                                       key will do; exit 10 on any FAIL
+  seolyticize env --client <id> [--format dotenv|coolify|vercel|k8s]
+            [--push coolify --coolify-url <url> --coolify-app <uuid>]
+                                                      the site's variables, scope and reader; --push
+                                                      sets the readable ones, token from COOLIFY_TOKEN
 
 Shortcuts:
   seolyticize clients                                  list_clients
@@ -190,7 +197,11 @@ export async function run(argv: readonly string[], io: CliIo): Promise<number> {
           { status: null },
         );
       }
-      return build({ apiKey, ...(baseUrl ? { baseUrl } : {}) });
+      return build({
+        apiKey,
+        client: `cli/${CLI_VERSION}`,
+        ...(baseUrl ? { baseUrl } : {}),
+      });
     };
 
     let discovery: Discovery | null = null;
@@ -311,6 +322,7 @@ export async function run(argv: readonly string[], io: CliIo): Promise<number> {
           lines: io.stdinLines(),
           write: (line) => io.stdout(`${line}\n`),
           log: (line) => io.stderr(`${line}\n`),
+          client: `cli/${CLI_VERSION}`,
         });
         return EXIT.ok;
       }
@@ -559,6 +571,20 @@ export async function run(argv: readonly string[], io: CliIo): Promise<number> {
         return open.some((item) => item.status === "failed")
           ? EXIT.checksFailed
           : EXIT.ok;
+      }
+
+      case "env": {
+        const { clientId } = await resolveClient({ clientId: option(args, "client") });
+        const answer = await envCommand(connect(), clientId, {
+          format: option(args, "format"),
+          push: option(args, "push"),
+          coolifyUrl: option(args, "coolify-url"),
+          coolifyApp: option(args, "coolify-app"),
+          token: io.env["COOLIFY_TOKEN"],
+          fetch: io.fetch ?? fetch,
+        });
+        print(io, args, answer.data, () => answer.text);
+        return EXIT.ok;
       }
 
       case "find": {
