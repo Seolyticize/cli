@@ -37,7 +37,7 @@ const inNextApp = (name: string) =>
 
 const LAYOUT = /^layout\.(tsx|jsx|js|ts)$/;
 /** The script tag, or a component of the site's own whose name says it wraps it. */
-const TAG = /data-site=|\/a\.js\b|<SeolyticizeAnalytics\b|<\w*Seolyticize\w*\b/i;
+const TAG = /data-site(?:-key)?=|\/a\.js\b|<SeolyticizeAnalytics\b|<\w*Seolyticize\w*\b/i;
 const IMPORT = /(?:from\s+|import\s+|import\(\s*)["']([^"']+)["']/g;
 const FOLLOW_DEPTH = 4;
 const FOLLOW_FILES = 200;

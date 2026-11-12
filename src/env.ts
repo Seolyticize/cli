@@ -20,7 +20,12 @@ export type EnvVar = {
   usedBy: string;
   /** For a value of null: the call that issues (or replaces) it. */
   issuedBy?: string;
+  /** For a value of null that is known but not complete: why it is left out. */
+  withheld?: string;
 };
+
+/** Where the deploy hook's credentials and signing are documented. */
+const HOOK_DOCS = "https://seolyticize.com/docs/onboard-a-client";
 
 export const ENV_FORMATS = ["dotenv", "coolify", "vercel", "k8s"] as const;
 export type EnvFormat = (typeof ENV_FORMATS)[number];
@@ -32,7 +37,13 @@ export async function clientEnv(sdk: Caller, clientId: string): Promise<EnvVar[]
     sdk.call("get_deploy_hook", { clientId }),
   ])) as [
     { siteKey?: string | null },
-    { deployHook: { hookId: string; url?: string } | null },
+    {
+      deployHook: {
+        hookId: string;
+        url?: string;
+        signing?: { hookSecret: boolean };
+      } | null;
+    },
   ];
   const siteKey = analytics.siteKey ?? null;
   const vars: EnvVar[] = [
@@ -75,13 +86,25 @@ export async function clientEnv(sdk: Caller, clientId: string): Promise<EnvVar[]
     },
   ];
   if (hook.deployHook) {
+    // The bare URL holds the public id only: a call needs the secret beside it
+    // (Bearer, or a signature made with it). A hook from before signed calls is
+    // usually wired up with the URL holding its secret, so the bare URL pushed
+    // over that value would break the hook.
+    const signed = hook.deployHook.signing?.hookSecret === true;
     vars.push(
       {
         name: "SEOLYTICIZE_DEPLOY_HOOK_URL",
-        value: hook.deployHook.url ?? null,
+        value: signed ? (hook.deployHook.url ?? null) : null,
         scope: "run",
-        usedBy: "the post-deploy command (get_deploy_hook howToCall.coolify)",
-        issuedBy: "create_deploy_hook",
+        usedBy:
+          "the post-deploy command (get_deploy_hook howToCall.coolify), always with SEOLYTICIZE_DEPLOY_HOOK_SECRET beside it",
+        ...(signed
+          ? { issuedBy: "create_deploy_hook" }
+          : {
+              withheld:
+                "this hook predates signed calls (get_deploy_hook signing.hookSecret false), so its working value is the URL holding the secret, which cannot be read back",
+              issuedBy: `rotate_deploy_hook once gives a signed hook, then set its new secret too (the old secret and webhookUrl stop at once); see ${HOOK_DOCS}`,
+            }),
       },
       {
         name: "SEOLYTICIZE_DEPLOY_HOOK_ID",
@@ -101,7 +124,10 @@ export async function clientEnv(sdk: Caller, clientId: string): Promise<EnvVar[]
   return vars;
 }
 
-const missing = (one: EnvVar) => `<not readable: ${one.issuedBy ?? "issue it"}>`;
+const missing = (one: EnvVar) =>
+  one.withheld
+    ? `<not emitted: ${one.withheld}. Fix: ${one.issuedBy}>`
+    : `<not readable: ${one.issuedBy ?? "issue it"}>`;
 const sh = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`;
 const note = (one: EnvVar) => `# ${one.name} (${one.scope}): ${one.usedBy}`;
 
@@ -157,7 +183,11 @@ export function renderEnv(vars: EnvVar[], format: EnvFormat): string {
           data: coolifyEntries(known),
           buildTime: known.filter((one) => one.scope === "build").map((one) => one.name),
           note: COOLIFY_BUILD_NOTE,
-          notSet: unknown.map((one) => ({ key: one.name, issuedBy: one.issuedBy })),
+          notSet: unknown.map((one) => ({
+            key: one.name,
+            issuedBy: one.issuedBy,
+            ...(one.withheld ? { withheld: one.withheld } : {}),
+          })),
         },
         null,
         2,
@@ -185,18 +215,35 @@ export function coolifyEntries(vars: EnvVar[]) {
 const COOLIFY_BUILD_NOTE =
   "Coolify's API documents no build-time flag: check that build-scope variables are available at build in the application's Environment Variables.";
 
+export type PushStatus = "new" | "unchanged" | "changed" | "hidden";
+
+async function refusal(response: Response, what: string) {
+  // Coolify's message, never the request: that holds the token.
+  const reason = (await response.text().catch(() => "")).slice(0, 300);
+  return new Error(`Coolify refused ${what} (${response.status}): ${reason}`);
+}
+
 /**
  * Pushes the readable values to a Coolify application through its API. The
  * token is read from COOLIFY_TOKEN only, so it never sits in shell history,
- * and is never printed.
+ * and is never printed. The application's variables are read first: new names
+ * are added, and an existing value is replaced only with force (a value Coolify
+ * hides, is_shown_once, cannot be compared, so it counts as one to replace).
+ * Nothing is ever deleted, and no value is ever printed.
  */
 export async function pushToCoolify(input: {
   vars: EnvVar[];
   coolifyUrl: string;
   appUuid: string;
   token: string | undefined;
+  force?: boolean;
   fetch: typeof fetch;
-}): Promise<{ pushed: string[]; notSet: string[] }> {
+}): Promise<{
+  diff: Array<{ key: string; status: PushStatus }>;
+  pushed: string[];
+  refused: string[];
+  notSet: string[];
+}> {
   if (!input.token) {
     throw new UsageError(
       "Set COOLIFY_TOKEN to a Coolify API token (the whole value, id|secret) to push.",
@@ -211,26 +258,59 @@ export async function pushToCoolify(input: {
   } catch {
     throw new UsageError("--coolify-url takes the Coolify instance's address.");
   }
-  const data = coolifyEntries(input.vars);
-  const response = await input.fetch(
-    new URL(`/api/v1/applications/${input.appUuid}/envs/bulk`, base),
-    {
+  const envsUrl = new URL(`/api/v1/applications/${input.appUuid}/envs`, base);
+  const headers = {
+    authorization: `Bearer ${input.token}`,
+    "content-type": "application/json",
+    accept: "application/json",
+  };
+
+  // GET /applications/{uuid}/envs lists every variable, preview ones included.
+  const listed = await input.fetch(envsUrl, { headers });
+  if (!listed.ok) throw await refusal(listed, "the read of its variables");
+  const current = new Map<string, string | null>();
+  for (const one of (await listed.json()) as Array<{
+    key?: string;
+    value?: string | null;
+    is_preview?: boolean;
+    is_shown_once?: boolean;
+  }>) {
+    if (!one.key || one.is_preview) continue;
+    current.set(one.key, one.is_shown_once ? null : (one.value ?? null));
+  }
+
+  const entries = coolifyEntries(input.vars);
+  const diff = entries.map((entry) => {
+    const now = current.get(entry.key);
+    const status: PushStatus = !current.has(entry.key)
+      ? "new"
+      : now === null
+        ? "hidden"
+        : now === entry.value
+          ? "unchanged"
+          : "changed";
+    return { key: entry.key, status };
+  });
+  const send = entries.filter((_, index) => {
+    const status = diff[index]!.status;
+    return status === "new" || (input.force === true && status !== "unchanged");
+  });
+  if (send.length > 0) {
+    const response = await input.fetch(new URL(`${envsUrl.pathname}/bulk`, base), {
       method: "PATCH",
-      headers: {
-        authorization: `Bearer ${input.token}`,
-        "content-type": "application/json",
-        accept: "application/json",
-      },
-      body: JSON.stringify({ data }),
-    },
-  );
-  if (!response.ok) {
-    // Coolify's message, never the request: that holds the token.
-    const reason = (await response.text().catch(() => "")).slice(0, 300);
-    throw new Error(`Coolify refused the update (${response.status}): ${reason}`);
+      headers,
+      body: JSON.stringify({ data: send }),
+    });
+    if (!response.ok) throw await refusal(response, "the update");
   }
   return {
-    pushed: data.map((entry) => entry.key),
+    diff,
+    pushed: send.map((entry) => entry.key),
+    refused: input.force
+      ? []
+      : diff
+          .filter((one) => one.status === "changed" || one.status === "hidden")
+          .map((one) => one.key),
     notSet: input.vars.filter((one) => one.value === null).map((one) => one.name),
   };
 }
@@ -245,9 +325,10 @@ export async function envCommand(
     coolifyUrl: string | undefined;
     coolifyApp: string | undefined;
     token: string | undefined;
+    force?: boolean;
     fetch: typeof fetch;
   },
-): Promise<{ data: unknown; text: string }> {
+): Promise<{ data: unknown; text: string; refused?: boolean }> {
   const format = (options.format ?? "dotenv") as EnvFormat;
   if (
     typeof clientId !== "string" ||
@@ -255,7 +336,7 @@ export async function envCommand(
     (options.push !== undefined && options.push !== "coolify")
   ) {
     throw new UsageError(
-      "Usage: seolyticize env --client <id> [--format dotenv|coolify|vercel|k8s] [--push coolify --coolify-url <url> --coolify-app <uuid>]",
+      "Usage: seolyticize env --client <id> [--format dotenv|coolify|vercel|k8s] [--push coolify --coolify-url <url> --coolify-app <uuid> [--force]]",
     );
   }
   const vars = await clientEnv(sdk, clientId);
@@ -265,10 +346,26 @@ export async function envCommand(
     coolifyUrl: options.coolifyUrl ?? "",
     appUuid: options.coolifyApp ?? "",
     token: options.token,
+    force: options.force,
     fetch: options.fetch,
   });
   return {
     data: result,
-    text: `Set in Coolify: ${result.pushed.join(", ")}\nNot readable, set by hand (--format dotenv names the call for each): ${result.notSet.join(", ")}\n${COOLIFY_BUILD_NOTE}`,
+    refused: result.refused.length > 0,
+    text: [
+      // Names and status only: a value here could be a secret.
+      ...result.diff.map((one) => `${one.status.padEnd(9)} ${one.key}`),
+      `Set in Coolify: ${result.pushed.join(", ") || "nothing"}`,
+      ...(result.refused.length > 0
+        ? [
+            `Not changed, already set to another value (--force replaces it): ${result.refused.join(", ")}`,
+          ]
+        : []),
+      `Not set, set by hand (--format dotenv names the call for each): ${result.notSet.join(", ")}`,
+      ...vars
+        .filter((one) => one.withheld)
+        .map((one) => `${one.name} not emitted: ${one.withheld}. Fix: ${one.issuedBy}`),
+      COOLIFY_BUILD_NOTE,
+    ].join("\n"),
   };
 }
