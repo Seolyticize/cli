@@ -30,6 +30,8 @@ export const EXIT = {
   unavailable: 9,
   /** `seolyticize verify` and `doctor`: the site has a failed check. */
   checksFailed: 10,
+  /** `seolyticize apply --ci`: the live config differs from the manifest. */
+  drift: 11,
 } as const;
 
 export function exitCodeFor(error: unknown): number {
@@ -57,4 +59,5 @@ export const EXIT_HELP = `Exit codes:
   7  refused (a well-formed request the product declined)
   8  rate limited (retries exhausted)
   9  server error or network failure
-  10 a check failed (verify, doctor)`;
+  10 a check failed (verify, doctor)
+  11 the live config differs from the manifest (apply --ci)`;

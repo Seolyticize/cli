@@ -76,6 +76,40 @@ seolyticize verify --site example.com   # or --client <id>; exit 10 on a failed 
 
 Prints one line per item not done, with its code, detail and next call.
 
+To gate a deploy pipeline on it:
+
+```sh
+seolyticize verify --client client_abc --ci --allow todo:web_analytics --junit seolyticize.xml
+```
+
+`--ci` fails the run (exit 10) on any item that is `failed`, `todo` or `blocked`, not only `failed`. `--allow` exempts items: `todo:web_analytics` allows that item while it is `todo`, a bare id or code (`slow_sitemap`) allows it in any status; repeat it or separate with commas. `--junit` writes one testcase per item for the CI's test report.
+
+### Keep the client in step with the repo
+
+```yaml
+# seolyticize.manifest.yaml
+version: 1
+client: client_abc # checked against the client found for the domain
+site: { domain: example.com, framework: nextjs }
+deployHook: true
+analytics: { excludePaths: ["/admin/*"] }
+goals:
+  - { name: Signup } # an event goal matching its name
+alerts:
+  channel: webhook
+  webhookUrl: { $env: ALERT_WEBHOOK_URL }
+platforms:
+  forumulate: { host: docs.example.com }
+```
+
+```sh
+seolyticize apply                      # apply_manifest with the file (default seolyticize.manifest.yaml)
+seolyticize apply --diff               # write nothing; list each change with the value it replaces
+seolyticize apply --ci                 # write nothing; exit 11 when the live config differs from the file
+```
+
+Every key except `version`, `client` and `site` is an `apply_manifest` argument (`seolyticize describe apply_manifest`). A value written `{ $env: NAME }` is read from the environment, so secrets stay out of the file, and is printed as `<$env NAME>`. A variable that is not set stops the run before any call.
+
 ### Output
 
 Human-readable tables by default. Scripts should pass `--json`, which prints the tool's
@@ -102,6 +136,7 @@ Stable, so scripts can branch on them:
 | 8    | rate limited (after the SDK's retries)               |
 | 9    | server error or network failure                      |
 | 10   | `seolyticize verify`: the site has a failed check    |
+| 11   | `seolyticize apply --ci`: the live config differs    |
 
 Errors go to stderr; results go to stdout.
 

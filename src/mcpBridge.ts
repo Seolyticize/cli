@@ -17,7 +17,7 @@ export type BridgeOptions = {
   write: (line: string) => void;
   log: (line: string) => void;
   fetch?: typeof fetch;
-  /** Sent as X-Seolyticize-Client: "cli/0.6.10". */
+  /** Sent as X-Seolyticize-Client: "cli/0.6.11". */
   client?: string | undefined;
 };
 

@@ -3,6 +3,10 @@ import { initFiles, writeInitFiles, type OnboardAnswer } from "./init.js";
 import { runDoctor } from "./doctor.js";
 import { verifyLocal } from "./verifyLocal.js";
 import { envCommand } from "./env.js";
+import { writeFile } from "node:fs/promises";
+import { goalNames, renderGoalTypes } from "./goalTypes.js";
+import { applyCommand } from "./manifest.js";
+import { failingItems, junitReport, type VerifyItem } from "./verifyRemote.js";
 import {
   AuthenticationError,
   DEFAULT_BASE_URL,
@@ -30,7 +34,7 @@ import { USAGE } from "./cli/usage.js";
 
 export { USAGE };
 
-export const CLI_VERSION = "0.6.10";
+export const CLI_VERSION = "0.6.11";
 
 /**
  * Everything the CLI touches outside itself, passed in.
@@ -48,6 +52,8 @@ export type CliIo = {
   promptSecret(question: string): Promise<string>;
   stdinIsTty: boolean;
   readFile(path: string): Promise<string>;
+  /** For `verify --junit`. */
+  writeFile?(path: string, text: string): Promise<void>;
   env: ConfigEnv;
   home: string;
   createClient?: (options: ClientOptions) => SeolyticizeClient;
@@ -495,14 +501,18 @@ export async function run(argv: readonly string[], io: CliIo): Promise<number> {
         const check = (await sdk.call("verify_site", { clientId })) as {
           ready: boolean;
           blocked?: string[];
-          items: Array<{
-            id: string;
-            status: string;
-            code?: string;
-            detail: string;
-            next: unknown;
-          }>;
+          items: VerifyItem[];
         };
+        const ci = flag(args, "ci");
+        const failing = failingItems(check.items, {
+          ci,
+          allow: (args.options.get("allow") ?? []).flatMap((entry) => entry.split(",")),
+        });
+        const junit = option(args, "junit");
+        if (junit) {
+          if (!io.writeFile) throw new UsageError("--junit needs a file system.");
+          await io.writeFile(junit, junitReport(clientId, check.items, failing));
+        }
         const open = check.items.filter(
           (item) => item.status !== "done" && item.status !== "optional",
         );
@@ -511,13 +521,22 @@ export async function run(argv: readonly string[], io: CliIo): Promise<number> {
             `${check.ready ? "ready" : "not ready"}${check.blocked?.length ? ` (degraded: ${check.blocked.join(", ")} blocked)` : ""}`,
             ...open.map(
               (item) =>
-                `  ${item.status.padEnd(11)} ${item.code ?? item.id}: ${item.detail}${item.next ? ` → ${JSON.stringify(item.next)}` : ""}`,
+                `  ${(failing.includes(item) ? "FAIL " : "") + item.status.padEnd(11)} ${item.code ?? item.id}: ${item.detail}${item.next ? ` → ${JSON.stringify(item.next)}` : ""}`,
             ),
           ].join("\n"),
         );
-        return open.some((item) => item.status === "failed")
-          ? EXIT.checksFailed
-          : EXIT.ok;
+        return failing.length > 0 ? EXIT.checksFailed : EXIT.ok;
+      }
+
+      case "apply": {
+        const file = option(args, "file") ?? rest[0] ?? "seolyticize.manifest.yaml";
+        const answer = await applyCommand(
+          connect(),
+          file === "-" ? await io.readStdin() : await io.readFile(file),
+          { env: io.env, diff: flag(args, "diff"), ci: flag(args, "ci") },
+        );
+        print(io, args, answer.data, () => answer.text);
+        return answer.exit;
       }
 
       case "env": {
@@ -533,6 +552,18 @@ export async function run(argv: readonly string[], io: CliIo): Promise<number> {
         });
         print(io, args, answer.data, () => answer.text);
         return answer.refused ? EXIT.refused : EXIT.ok;
+      }
+
+      case "types": {
+        const { clientId } = await resolveClient({ clientId: option(args, "client") });
+        const names = await goalNames(connect(), String(clientId));
+        const text = renderGoalTypes(names, String(clientId));
+        const out = option(args, "out");
+        if (out) await writeFile(out, text);
+        print(io, args, { clientId, names, out: out ?? null }, () =>
+          out ? `Wrote ${names.length} event names to ${out}.` : text,
+        );
+        return EXIT.ok;
       }
 
       case "find": {

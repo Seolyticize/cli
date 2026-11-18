@@ -5,7 +5,7 @@
  * Kept to wiring so that everything with behaviour lives in cli.ts, where the
  * tests can reach it without a terminal.
  */
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { createInterface } from "node:readline";
 import { Writable } from "node:stream";
@@ -49,6 +49,7 @@ process.exitCode = await run(process.argv.slice(2), {
   promptSecret,
   stdinIsTty: Boolean(process.stdin.isTTY),
   readFile: (path) => readFile(path, "utf8"),
+  writeFile: (path, text) => writeFile(path, text, "utf8"),
   env: process.env,
   home: homedir(),
   stdinLines: () => createInterface({ input: process.stdin, crlfDelay: Infinity }),

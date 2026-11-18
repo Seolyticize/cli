@@ -20,8 +20,19 @@ Usage:
                                                       verification and IndexNow files, robots, and for
                                                       Next.js the analytics component, CSP origins and
                                                       a sitemap source. Existing files are kept.
-  seolyticize verify --site <domain> | --client <id>   verify_site: one line per item not done;
-                                                      exit 10 when an item failed
+  seolyticize verify --site <domain> | --client <id> [--ci] [--allow <status:id>,...] [--junit <file>]
+                                                      verify_site: one line per item not done;
+                                                      exit 10 when an item failed. --ci fails on any
+                                                      item failed, todo or blocked, except those
+                                                      --allow names (todo:web_analytics, or an id
+                                                      in any status); --junit writes a JUnit report
+  seolyticize apply [--file seolyticize.manifest.yaml] [--diff] [--ci]
+                                                      apply_manifest from the repo's YAML manifest;
+                                                      {$env: NAME} reads a secret from the environment
+                                                      and is masked in the output. --diff writes
+                                                      nothing and shows each change; --ci writes
+                                                      nothing and exits 11 when the live config
+                                                      differs from the file
   seolyticize verify --local <dir> [--public public]   the same mistakes in the repo's files, before a
                                                       deploy; no key, no network; exit 10 on any
   seolyticize doctor --site <domain> | --client <id>   one PASS, FAIL or INFO line per check; a read-only
@@ -31,6 +42,9 @@ Usage:
                                                       the site's variables, scope and reader; --push
                                                       adds the readable ones, token from COOLIFY_TOKEN;
                                                       changes a set value only with --force (else exit 7)
+  seolyticize types --client <id> [--out src/seolyticize.d.ts]
+                                                      the live goals' event names as types for
+                                                      @seolyticize/web's track(); a typo fails tsc
 
 Shortcuts:
   seolyticize clients                                  list_clients
