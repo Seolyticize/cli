@@ -34,7 +34,7 @@ import { USAGE } from "./cli/usage.js";
 
 export { USAGE };
 
-export const CLI_VERSION = "0.6.11";
+export const CLI_VERSION = "0.6.12";
 
 /**
  * Everything the CLI touches outside itself, passed in.
@@ -528,13 +528,24 @@ export async function run(argv: readonly string[], io: CliIo): Promise<number> {
         return failing.length > 0 ? EXIT.checksFailed : EXIT.ok;
       }
 
+      case "plan":
       case "apply": {
-        const file = option(args, "file") ?? rest[0] ?? "seolyticize.manifest.yaml";
-        const answer = await applyCommand(
-          connect(),
-          file === "-" ? await io.readStdin() : await io.readFile(file),
-          { env: io.env, diff: flag(args, "diff"), ci: flag(args, "ci") },
-        );
+        const file = option(args, "file") ?? rest[0];
+        // Without --file: deploy/seolyticize/seolyticize.yaml, else seolyticize.manifest.yaml.
+        const text =
+          file === "-"
+            ? await io.readStdin()
+            : file
+              ? await io.readFile(file)
+              : await io
+                  .readFile("deploy/seolyticize/seolyticize.yaml")
+                  .catch(() => io.readFile("seolyticize.manifest.yaml"));
+        const answer = await applyCommand(connect(), text, {
+          env: io.env,
+          diff: command === "plan" || flag(args, "diff"),
+          ci: flag(args, "ci") || flag(args, "check"),
+          envOut: option(args, "env-out"),
+        });
         print(io, args, answer.data, () => answer.text);
         return answer.exit;
       }

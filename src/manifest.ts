@@ -5,8 +5,11 @@
  * {$env: NAME} is read from the environment here, and every value read that
  * way is masked in what is printed. --diff and --ci write nothing (dryRun);
  * --ci exits 11 when the live config differs from the file, so a pipeline
- * catches a setting changed in the app.
+ * catches a setting changed in the app. seolyticize plan is apply --diff, and
+ * --check is --ci. --env-out writes the site key, deploy-hook URL and ids to a
+ * file with mode 600, and masks the key and URL in what is printed.
  */
+import { chmod, writeFile } from "node:fs/promises";
 import { load } from "js-yaml";
 import { UsageError } from "./args.js";
 import { EXIT } from "./exitCodes.js";
@@ -52,11 +55,54 @@ export function resolveEnvRefs(
  */
 export function manifestInput(doc: unknown): { input: Rec; client: string | null } {
   if (!isRecord(doc)) throw new UsageError("The manifest must be a YAML mapping.");
-  const { version, client, site, ...rest } = doc;
+  const { version, client, site, budget, deployHook, ...rest } = doc;
   if (version !== undefined && version !== 1) {
     throw new UsageError(`Manifest version ${String(version)} is not known; use 1.`);
   }
-  const input: Rec = { ...(isRecord(site) ? site : {}), ...rest };
+  // client: {domain, name, framework} is site under another name; a string is the client id.
+  const input: Rec = {
+    ...(isRecord(client) ? client : {}),
+    ...(isRecord(site) ? site : {}),
+    ...rest,
+  };
+  // The short forms of deploy/seolyticize/seolyticize.yaml, as apply_manifest takes them.
+  if (isRecord(budget)) {
+    if (budget["monthlyUsd"] !== undefined)
+      input["monthlyBudgetUsd"] = budget["monthlyUsd"];
+    if (budget["alertAt"] !== undefined) input["budgetAlertAt"] = budget["alertAt"];
+  }
+  const platforms: Rec = isRecord(input["platforms"]) ? { ...input["platforms"] } : {};
+  if (isRecord(deployHook)) {
+    input["deployHook"] = true;
+    if (isRecord(deployHook["forumulate"]))
+      platforms["forumulate"] = {
+        ...deployHook["forumulate"],
+        ...(platforms["forumulate"] as Rec),
+      };
+  } else if (deployHook !== undefined) input["deployHook"] = deployHook;
+  if (isRecord(input["analytics"])) {
+    const { include, exclude, ...analytics } = input["analytics"];
+    input["analytics"] = {
+      ...(include !== undefined ? { includePaths: include } : {}),
+      ...(exclude !== undefined ? { excludePaths: exclude } : {}),
+      ...analytics,
+    };
+  }
+  // alerts as a list of one destination; a Watchtower one names its project, linked here.
+  if (Array.isArray(input["alerts"])) {
+    if (input["alerts"].length > 1)
+      throw new UsageError(
+        "alerts takes one destination: the default alerts all go there.",
+      );
+    const { projectId, apiKey, ...alerts } = (input["alerts"][0] ?? {}) as Rec;
+    input["alerts"] = alerts;
+    if (alerts["channel"] === "watchtower" && projectId !== undefined)
+      platforms["watchtower"] = {
+        projectId,
+        ...(apiKey !== undefined ? { apiKey } : {}),
+      };
+  }
+  if (Object.keys(platforms).length > 0) input["platforms"] = platforms;
   if (Array.isArray(input["goals"])) {
     input["goals"] = input["goals"].map((goal) =>
       isRecord(goal) && goal["kind"] === undefined && typeof goal["name"] === "string"
@@ -87,16 +133,19 @@ export function maskDeep(value: unknown, secrets: Map<string, string>): unknown 
   );
 }
 
+type EnvEntry = { name: string; value: string };
+
 export type ApplyAnswer = {
   clientId: string | null;
   dryRun: boolean;
+  env?: { build?: EnvEntry[]; runtime?: EnvEntry[] };
   steps: Array<{ tool: string; outcome: string; result?: unknown; warnings?: string[] }>;
 };
 
 export async function applyCommand(
   sdk: Caller,
   text: string,
-  options: { env: ConfigEnv; diff: boolean; ci: boolean },
+  options: { env: ConfigEnv; diff: boolean; ci: boolean; envOut?: string | undefined },
 ): Promise<{ data: unknown; text: string; exit: number }> {
   let doc: unknown;
   try {
@@ -111,6 +160,28 @@ export async function applyCommand(
   const dryRun = options.diff || options.ci;
   const answer = (await sdk.call("apply_manifest", { ...input, dryRun })) as ApplyAnswer;
   const changes = answer.steps.filter((step) => step.outcome === "would_run");
+  // --env-out: the site key, hook URL and ids to a file only the user can read, never printed.
+  const written = [...(answer.env?.build ?? []), ...(answer.env?.runtime ?? [])].filter(
+    (entry, i, all) =>
+      !entry.value.startsWith("<") && all.findIndex((e) => e.name === entry.name) === i,
+  );
+  if (options.envOut) {
+    await writeFile(
+      options.envOut,
+      written
+        .map(
+          (entry) => `${entry.name}=${entry.value}
+`,
+        )
+        .join(""),
+      { mode: 0o600 },
+    );
+    // mode applies only when writeFile creates the file.
+    await chmod(options.envOut, 0o600);
+    for (const entry of written)
+      if (/SITE_KEY|HOOK_URL/.test(entry.name) && !secrets.has(entry.value))
+        secrets.set(entry.value, entry.name);
+  }
   const lines = [
     `${dryRun ? "Dry run for" : "Applied to"} ${answer.clientId ?? `${String(input["domain"])} (no client yet)`}`,
     ...(client && answer.clientId && client !== answer.clientId
@@ -127,6 +198,11 @@ export async function applyCommand(
         ...(step.warnings ?? []).map((warning) => `            WARN ${warning}`),
       ].join("\n"),
     ),
+    ...(options.envOut
+      ? [
+          `Wrote ${written.map((entry) => entry.name).join(", ") || "nothing (no value yet: a dry run for a new client)"} to ${options.envOut} (mode 600).`,
+        ]
+      : []),
     ...(options.ci
       ? [
           changes.length === 0

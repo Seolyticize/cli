@@ -25,7 +25,7 @@ export type ParsedArgs = {
  * Options that never take a value. Without this list `--json clients` would
  * read "clients" as the value of --json rather than as the command.
  */
-export const SWITCHES = new Set(["json", "help", "version", "ci", "diff"]);
+export const SWITCHES = new Set(["json", "help", "version", "ci", "diff", "check"]);
 
 export function parseArgs(argv: readonly string[]): ParsedArgs {
   const positionals: string[] = [];

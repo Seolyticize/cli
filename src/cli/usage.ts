@@ -26,13 +26,18 @@ Usage:
                                                       item failed, todo or blocked, except those
                                                       --allow names (todo:web_analytics, or an id
                                                       in any status); --junit writes a JUnit report
-  seolyticize apply [--file seolyticize.manifest.yaml] [--diff] [--ci]
-                                                      apply_manifest from the repo's YAML manifest;
-                                                      {$env: NAME} reads a secret from the environment
-                                                      and is masked in the output. --diff writes
-                                                      nothing and shows each change; --ci writes
-                                                      nothing and exits 11 when the live config
-                                                      differs from the file
+  seolyticize apply [--file <yaml>] [--diff] [--ci|--check] [--env-out <file>]
+  seolyticize plan  [--file <yaml>] [--check] [--env-out <file>]
+                                                      apply_manifest from the repo's YAML manifest
+                                                      (default deploy/seolyticize/seolyticize.yaml,
+                                                      else seolyticize.manifest.yaml); {$env: NAME}
+                                                      reads a secret from the environment and is
+                                                      masked in the output. plan (= apply --diff)
+                                                      writes nothing and shows each change; --ci or
+                                                      --check writes nothing and exits 11 when the
+                                                      live config differs from the file. --env-out
+                                                      writes the site key, deploy-hook URL and ids
+                                                      to the file (mode 600), never printed
   seolyticize verify --local <dir> [--public public]   the same mistakes in the repo's files, before a
                                                       deploy; no key, no network; exit 10 on any
   seolyticize doctor --site <domain> | --client <id>   one PASS, FAIL or INFO line per check; a read-only

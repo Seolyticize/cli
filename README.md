@@ -87,28 +87,25 @@ seolyticize verify --client client_abc --ci --allow todo:web_analytics --junit s
 ### Keep the client in step with the repo
 
 ```yaml
-# seolyticize.manifest.yaml
-version: 1
-client: client_abc # checked against the client found for the domain
-site: { domain: example.com, framework: nextjs }
-deployHook: true
-analytics: { excludePaths: ["/admin/*"] }
+# deploy/seolyticize/seolyticize.yaml (or seolyticize.manifest.yaml at the root)
+client: { domain: example.com, name: example, framework: nextjs }
+budget: { monthlyUsd: 5, alertAt: 0.8 }
+analytics: { hostnames: [example.com], include: ["/", "/pricing", "/blog/*"] }
 goals:
   - { name: Signup } # an event goal matching its name
-alerts:
-  channel: webhook
-  webhookUrl: { $env: ALERT_WEBHOOK_URL }
-platforms:
-  forumulate: { host: docs.example.com }
+pathOwners: [{ prefix: /docs, owner: forumulate }]
+alerts: [{ channel: watchtower, projectId: prj_abc }]
+deployHook:
+  forumulate: { org: <forumulate-org-uuid>, apiKey: { $env: FORUMULATE_TOKEN } }
 ```
 
 ```sh
-seolyticize apply                      # apply_manifest with the file (default seolyticize.manifest.yaml)
-seolyticize apply --diff               # write nothing; list each change with the value it replaces
-seolyticize apply --ci                 # write nothing; exit 11 when the live config differs from the file
+seolyticize plan                       # write nothing; list each change (= apply --diff)
+seolyticize plan --check               # write nothing; exit 11 when the live config differs (= apply --ci)
+seolyticize apply --env-out ./seolyticize.env   # apply; site key, hook URL and ids to the file, mode 600
 ```
 
-Every key except `version`, `client` and `site` is an `apply_manifest` argument (`seolyticize describe apply_manifest`). A value written `{ $env: NAME }` is read from the environment, so secrets stay out of the file, and is printed as `<$env NAME>`. A variable that is not set stops the run before any call.
+Without `--file` the file is `deploy/seolyticize/seolyticize.yaml`, else `seolyticize.manifest.yaml`. `client: {domain, name, framework}` (or `site:`), `budget`, `analytics.include`, a one-item `alerts` list (a Watchtower `projectId` links that project) and `deployHook: {forumulate: {org, apiKey}}` (the hook plus the signed Forumulate webhook) are short forms; every other key is an `apply_manifest` argument (`seolyticize describe apply_manifest`). A value written `{ $env: NAME }` is read from the environment, so secrets stay out of the file, and is printed as `<$env NAME>`. A variable that is not set stops the run before any call. `--env-out` never prints the site key or hook URL.
 
 ### Output
 
@@ -136,7 +133,7 @@ Stable, so scripts can branch on them:
 | 8    | rate limited (after the SDK's retries)               |
 | 9    | server error or network failure                      |
 | 10   | `seolyticize verify`: the site has a failed check    |
-| 11   | `seolyticize apply --ci`: the live config differs    |
+| 11   | `seolyticize plan --check`: the live config differs  |
 
 Errors go to stderr; results go to stdout.
 
